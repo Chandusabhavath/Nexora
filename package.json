@@ -1,0 +1,25 @@
+{
+  "name": "nexora",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build --prefix client",
+    "start": "npm start --prefix server",
+    "server": "npm start --prefix server",
+    "client": "npm run dev --prefix client",
+    "test": "npm test --prefix server"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "express-validator": "^7.2.1",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.10.1",
+    "uuid": "^11.1.0"
+  }
+}
