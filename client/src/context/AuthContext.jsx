@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { apiLogin, apiRegister, apiGetMe } from '../api/client.js';
+import { apiLogin, apiRegister, apiGetMe, apiVerifyEmailOtp } from '../api/client.js';
 
 const AuthContext = createContext(null);
 
@@ -42,6 +42,16 @@ export const AuthProvider = ({ children }) => {
     return res;
   };
 
+  const loginWithEmailOtp = async (email, otp) => {
+    const res = await apiVerifyEmailOtp(email, otp);
+    if (res.success && res.token) {
+      localStorage.setItem('nexora_token', res.token);
+      setToken(res.token);
+      setUser(res.user);
+    }
+    return res;
+  };
+
   const register = async (userData) => {
     const res = await apiRegister(userData);
     if (res.success && res.token) {
@@ -74,6 +84,7 @@ export const AuthProvider = ({ children }) => {
         token,
         loading,
         login,
+        loginWithEmailOtp,
         register,
         logout,
         refreshUser,

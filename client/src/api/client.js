@@ -32,6 +32,9 @@ export const apiRegister = (userData) => apiClient('/auth/register', { method: '
 export const apiGetMe = () => apiClient('/auth/me');
 export const apiRequestOtp = (phone) => apiClient('/auth/otp/request', { method: 'POST', body: JSON.stringify({ phone }) });
 export const apiVerifyOtp = (phone, otp) => apiClient('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ phone, otp }) });
+export const apiRequestEmailOtp = (email) => apiClient('/auth/request-otp', { method: 'POST', body: JSON.stringify({ email }) });
+export const apiVerifyEmailOtp = (email, otp) => apiClient('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email, otp }) });
+export const apiResendEmailOtp = (email) => apiClient('/auth/resend-otp', { method: 'POST', body: JSON.stringify({ email }) });
 
 // Services & Providers
 export const apiGetServices = (params = '') => apiClient(`/services${params ? `?${params}` : ''}`);

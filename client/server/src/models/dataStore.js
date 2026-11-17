@@ -19,6 +19,7 @@ class DataStore {
     this.commissionRecords = [];
     this.disputes = [];
     this.notifications = [];
+    this.otps = [];
     this.auditLogs = [];
     this.commissionRules = {
       defaultPercentage: 10,
@@ -752,6 +753,70 @@ class DataStore {
       Object.assign(user, updates);
     }
     return user;
+  }
+
+  // OTP Verification & Rate Limiting Queries
+  addOtp({ email, userId, codeHash, expiresAt, plainCode }) {
+    const otpId = `otp_${uuidv4().substring(0, 10)}`;
+    const newOtp = {
+      _id: otpId,
+      id: otpId,
+      userId: userId || null,
+      email: email.toLowerCase().trim(),
+      codeHash,
+      plainCode: process.env.NODE_ENV !== 'production' ? plainCode : undefined,
+      expiresAt: new Date(expiresAt).toISOString(),
+      attempts: 0,
+      consumed: false,
+      consumedAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.otps.push(newOtp);
+    return newOtp;
+  }
+
+  getActiveOtpByEmail(email) {
+    const normalized = email.toLowerCase().trim();
+    const now = new Date();
+    return this.otps
+      .filter((o) => o.email === normalized && !o.consumed && new Date(o.expiresAt) > now)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0] || null;
+  }
+
+  getLatestOtpByEmail(email) {
+    const normalized = email.toLowerCase().trim();
+    return this.otps
+      .filter((o) => o.email === normalized)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0] || null;
+  }
+
+  incrementOtpAttempts(id) {
+    const otp = this.otps.find((o) => o._id === id || o.id === id);
+    if (otp) {
+      otp.attempts = (otp.attempts || 0) + 1;
+      otp.updatedAt = new Date().toISOString();
+      if (otp.attempts >= 3) {
+        otp.consumed = true;
+      }
+    }
+    return otp;
+  }
+
+  consumeOtp(id) {
+    const otp = this.otps.find((o) => o._id === id || o.id === id);
+    if (otp) {
+      otp.consumed = true;
+      otp.consumedAt = new Date().toISOString();
+      otp.updatedAt = new Date().toISOString();
+    }
+    return otp;
+  }
+
+  purgeExpiredOtps() {
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    this.otps = this.otps.filter((o) => !(new Date(o.expiresAt) < oneHourAgo || (o.consumed && new Date(o.createdAt) < oneHourAgo)));
   }
 
   // Provider Queries

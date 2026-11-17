@@ -2,15 +2,17 @@ import React, { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { apiRequestOtp, apiVerifyOtp } from '../api/client.js';
-import { Mail, Lock, Phone, ArrowRight, ShieldCheck } from 'lucide-react';
+import { EmailOtpAuth } from '../components/EmailOtpAuth.jsx';
+import { Mail, Lock, Phone, ArrowRight, ShieldCheck, Sparkles } from 'lucide-react';
 
 export const LoginPage = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirect = searchParams.get('redirect') || '/';
+  const initialMethod = searchParams.get('method') || 'email_otp';
 
-  const [authMethod, setAuthMethod] = useState('password'); // 'password' | 'otp'
+  const [authMethod, setAuthMethod] = useState(initialMethod); // 'email_otp' | 'password' | 'otp'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   
@@ -102,8 +104,18 @@ export const LoginPage = () => {
           <p className="text-xs text-gray-500">Sign in to your account</p>
         </div>
 
-        {/* Method Toggle: Email vs Phone OTP */}
-        <div className="grid grid-cols-2 p-1 bg-surface-100 rounded-xl text-xs font-semibold">
+        {/* Method Toggle: Email OTP vs Password vs Mobile OTP */}
+        <div className="grid grid-cols-3 p-1 bg-surface-100 rounded-xl text-xs font-semibold">
+          <button
+            type="button"
+            onClick={() => { setAuthMethod('email_otp'); setError(''); }}
+            className={`py-2 rounded-lg transition-colors flex items-center justify-center space-x-1 ${
+              authMethod === 'email_otp' ? 'bg-white text-forest-900 shadow-xs' : 'text-gray-500 hover:text-gray-900'
+            }`}
+          >
+            <Sparkles className="w-3 h-3 text-emerald-600 inline" />
+            <span>Email OTP</span>
+          </button>
           <button
             type="button"
             onClick={() => { setAuthMethod('password'); setError(''); }}
@@ -111,7 +123,7 @@ export const LoginPage = () => {
               authMethod === 'password' ? 'bg-white text-forest-900 shadow-xs' : 'text-gray-500 hover:text-gray-900'
             }`}
           >
-            Email & Password
+            Password
           </button>
           <button
             type="button"
@@ -120,14 +132,19 @@ export const LoginPage = () => {
               authMethod === 'otp' ? 'bg-white text-forest-900 shadow-xs' : 'text-gray-500 hover:text-gray-900'
             }`}
           >
-            Mobile OTP
+            Mobile SMS
           </button>
         </div>
 
-        {error && (
+        {error && authMethod !== 'email_otp' && (
           <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700">
             {error}
           </div>
+        )}
+
+        {/* Email OTP Authentication Flow (2-Step Verification) */}
+        {authMethod === 'email_otp' && (
+          <EmailOtpAuth redirectUrl={redirect === 'booking' ? -1 : '/dashboard'} />
         )}
 
         {/* Email & Password Form */}
