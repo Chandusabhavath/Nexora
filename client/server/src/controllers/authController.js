@@ -228,6 +228,293 @@ export const getMe = async (req, res) => {
 };
 
 /**
+ * ============================================================================
+ * GOOGLE OAUTH 2.0 & GOOGLE IDENTITY SERVICES
+ * ============================================================================
+ */
+
+/**
+ * Initiate Google OAuth 2.0 redirection flow
+ * GET /api/auth/google
+ */
+export const initiateGoogleAuth = async (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const redirectUri = `${protocol}://${host}/api/auth/callback/google`;
+  const state = req.query.state || 'standard_login';
+
+  if (!clientId) {
+    console.warn('[GoogleAuth] GOOGLE_CLIENT_ID is not configured in environment variables.');
+    return res.redirect(
+      `/auth/callback?error=missing_google_client_id&message=${encodeURIComponent(
+        'Google OAuth requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to be configured in Vercel or your .env file.'
+      )}`
+    );
+  }
+
+  const googleAuthUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  googleAuthUrl.searchParams.set('client_id', clientId);
+  googleAuthUrl.searchParams.set('redirect_uri', redirectUri);
+  googleAuthUrl.searchParams.set('response_type', 'code');
+  googleAuthUrl.searchParams.set('scope', 'openid email profile');
+  googleAuthUrl.searchParams.set('access_type', 'offline');
+  googleAuthUrl.searchParams.set('prompt', 'select_account');
+  googleAuthUrl.searchParams.set('state', state);
+
+  return res.redirect(googleAuthUrl.toString());
+};
+
+/**
+ * Handle Google OAuth 2.0 authorization code callback
+ * GET /api/auth/callback/google
+ */
+export const handleGoogleCallback = async (req, res) => {
+  const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const frontendCallback = `${protocol}://${host}/auth/callback`;
+
+  try {
+    const { code, error, error_description } = req.query;
+
+    if (error) {
+      console.error('[GoogleAuth] Callback error from Google:', error, error_description);
+      return res.redirect(`${frontendCallback}?error=${encodeURIComponent(error)}&message=${encodeURIComponent(error_description || 'Access was denied by Google.')}`);
+    }
+
+    if (!code) {
+      return res.redirect(`${frontendCallback}?error=missing_code&message=${encodeURIComponent('No authorization code was received from Google.')}`);
+    }
+
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = `${protocol}://${host}/api/auth/callback/google`;
+
+    if (!clientId || !clientSecret) {
+      return res.redirect(`${frontendCallback}?error=missing_credentials&message=${encodeURIComponent('Google Client ID or Secret is not configured in server environment.')}`);
+    }
+
+    // 1. Exchange authorization code for tokens
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        code: code.toString(),
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    const tokenData = await tokenResponse.json();
+
+    if (!tokenResponse.ok || !tokenData.access_token) {
+      console.error('[GoogleAuth] Token exchange failed:', tokenData);
+      return res.redirect(`${frontendCallback}?error=token_exchange_failed&message=${encodeURIComponent(tokenData.error_description || tokenData.error || 'Failed to exchange authorization code with Google.')}`);
+    }
+
+    // 2. Fetch user profile from Google UserInfo API
+    const userinfoResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: {
+        Authorization: `Bearer ${tokenData.access_token}`,
+      },
+    });
+
+    const profile = await userinfoResponse.json();
+
+    if (!userinfoResponse.ok || !profile.email) {
+      console.error('[GoogleAuth] Failed to fetch Google user profile:', profile);
+      return res.redirect(`${frontendCallback}?error=userinfo_failed&message=${encodeURIComponent('Failed to retrieve user profile from Google.')}`);
+    }
+
+    // 3. Match or create user in database
+    const normalizedEmail = profile.email.toLowerCase().trim();
+    let user = dataStore.getUserByGoogleId(profile.sub) || dataStore.getUserByEmail(normalizedEmail);
+
+    if (user) {
+      dataStore.updateUser(user._id || user.id, {
+        googleId: profile.sub,
+        isVerified: true,
+        avatar: profile.picture || user.avatar,
+      });
+      user.googleId = profile.sub;
+      user.isVerified = true;
+      if (profile.picture) user.avatar = profile.picture;
+    } else {
+      user = dataStore.addUser({
+        name: profile.name || profile.given_name || normalizedEmail.split('@')[0],
+        email: normalizedEmail,
+        password: '',
+        googleId: profile.sub,
+        role: 'customer',
+        isVerified: true,
+        phoneVerified: false,
+        avatar: profile.picture || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(profile.name || normalizedEmail)}&backgroundColor=0F382C`,
+        address: { street: '', locality: 'Bandra', city: 'Mumbai', pincode: '400050', lat: 19.0596, lng: 72.8295 },
+        savedProviders: [],
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // 4. Issue JWT access token
+    const token = generateToken({
+      id: user._id || user.id,
+      role: user.role,
+      email: user.email,
+    });
+
+    // 5. Set secure HTTP-only cookie
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    // 6. Redirect to frontend callback route with token
+    return res.redirect(`${frontendCallback}?token=${encodeURIComponent(token)}&success=true`);
+  } catch (err) {
+    console.error('[GoogleAuth] Callback exception:', err);
+    return res.redirect(`${frontendCallback}?error=server_error&message=${encodeURIComponent(err.message)}`);
+  }
+};
+
+/**
+ * Verify Google ID token directly (Google Identity Services / One Tap)
+ * POST /api/auth/google
+ */
+export const verifyGoogleToken = async (req, res) => {
+  try {
+    const { credential, code } = req.body;
+
+    if (!credential && !code) {
+      return res.status(400).json({
+        success: false,
+        message: 'Google credential (ID token) or authorization code is required.',
+      });
+    }
+
+    let profile = null;
+
+    if (credential) {
+      const verifyRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
+      const tokenInfo = await verifyRes.json();
+
+      if (!verifyRes.ok || !tokenInfo.email) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid Google credential or token has expired.',
+          error: tokenInfo.error_description || tokenInfo.error,
+        });
+      }
+
+      profile = {
+        sub: tokenInfo.sub,
+        email: tokenInfo.email,
+        name: tokenInfo.name,
+        picture: tokenInfo.picture,
+      };
+    } else if (code) {
+      const clientId = process.env.GOOGLE_CLIENT_ID;
+      const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+      const redirectUri = req.body.redirectUri || 'postmessage';
+
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code,
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: redirectUri,
+          grant_type: 'authorization_code',
+        }),
+      });
+
+      const tokenData = await tokenRes.json();
+      if (!tokenRes.ok || !tokenData.access_token) {
+        return res.status(401).json({
+          success: false,
+          message: 'Failed to exchange authorization code with Google.',
+        });
+      }
+
+      const userinfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      });
+      profile = await userinfoRes.json();
+    }
+
+    if (!profile || !profile.email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Could not obtain email address from Google account.',
+      });
+    }
+
+    const normalizedEmail = profile.email.toLowerCase().trim();
+    let user = dataStore.getUserByGoogleId(profile.sub) || dataStore.getUserByEmail(normalizedEmail);
+
+    if (user) {
+      dataStore.updateUser(user._id || user.id, {
+        googleId: profile.sub,
+        isVerified: true,
+        avatar: profile.picture || user.avatar,
+      });
+      user.googleId = profile.sub;
+      user.isVerified = true;
+      if (profile.picture) user.avatar = profile.picture;
+    } else {
+      user = dataStore.addUser({
+        name: profile.name || normalizedEmail.split('@')[0],
+        email: normalizedEmail,
+        password: '',
+        googleId: profile.sub,
+        role: 'customer',
+        isVerified: true,
+        phoneVerified: false,
+        avatar: profile.picture || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(profile.name || normalizedEmail)}&backgroundColor=0F382C`,
+        address: { street: '', locality: 'Bandra', city: 'Mumbai', pincode: '400050', lat: 19.0596, lng: 72.8295 },
+        savedProviders: [],
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    const token = generateToken({ id: user._id || user.id, role: user.role, email: user.email });
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Google Sign-In completed successfully.',
+      token,
+      user: {
+        id: user._id || user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isVerified: user.isVerified,
+        avatar: user.avatar,
+        address: user.address,
+      },
+    });
+  } catch (err) {
+    console.error('[GoogleAuth] verifyGoogleToken error:', err);
+    return res.status(500).json({ success: false, message: 'Google verification failed.', error: err.message });
+  }
+};
+
+/**
  * Request real transactional email OTP
  * Rate-limited to max 1 request per 60 seconds per email
  */

@@ -35,6 +35,7 @@ export const apiVerifyOtp = (phone, otp) => apiClient('/auth/otp/verify', { meth
 export const apiRequestEmailOtp = (email) => apiClient('/auth/request-otp', { method: 'POST', body: JSON.stringify({ email }) });
 export const apiVerifyEmailOtp = (email, otp) => apiClient('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email, otp }) });
 export const apiResendEmailOtp = (email) => apiClient('/auth/resend-otp', { method: 'POST', body: JSON.stringify({ email }) });
+export const apiVerifyGoogleToken = (payload) => apiClient('/auth/google', { method: 'POST', body: JSON.stringify(payload) });
 
 // Services & Providers
 export const apiGetServices = (params = '') => apiClient(`/services${params ? `?${params}` : ''}`);

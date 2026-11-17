@@ -14,6 +14,7 @@ import { RegisterPage } from './pages/RegisterPage.jsx';
 import { CustomerDashboard } from './pages/CustomerDashboard.jsx';
 import { ProviderDashboard } from './pages/ProviderDashboard.jsx';
 import { AdminDashboard } from './pages/AdminDashboard.jsx';
+import { OAuthCallbackPage } from './pages/OAuthCallbackPage.jsx';
 
 export function App() {
   const [aiModalOpen, setAiModalOpen] = useState(false);
@@ -60,6 +61,7 @@ export function App() {
               />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RegisterPage />} />
+              <Route path="/auth/callback" element={<OAuthCallbackPage />} />
               <Route path="/dashboard" element={<CustomerDashboard />} />
               <Route path="/provider/dashboard" element={<ProviderDashboard />} />
               <Route path="/admin" element={<AdminDashboard />} />

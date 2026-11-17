@@ -740,6 +740,11 @@ class DataStore {
     return this.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
   }
 
+  getUserByGoogleId(googleId) {
+    if (!googleId) return null;
+    return this.users.find((u) => u.googleId === googleId);
+  }
+
   addUser(user) {
     if (!user._id) user._id = `usr_${uuidv4().substring(0, 8)}`;
     user.id = user._id;
