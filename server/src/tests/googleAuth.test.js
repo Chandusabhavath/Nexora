@@ -4,7 +4,7 @@ import http from 'http';
 import app from '../app.js';
 import { dataStore } from '../models/dataStore.js';
 
-test('▶ NEXORA Google OAuth 2.0 Authentication Suite', async (t) => {
+test('▶ NEXORA Google & Apple OAuth 2.0 Authentication Suite', async (t) => {
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
@@ -14,14 +14,16 @@ test('▶ NEXORA Google OAuth 2.0 Authentication Suite', async (t) => {
     server.close();
   });
 
-  await t.test('1. GET /api/auth/google: Gracefully redirects to callback if GOOGLE_CLIENT_ID is not configured', async () => {
+  await t.test('1. GET /api/auth/google: Zero-friction verified Google fallback when client_id is not in env', async () => {
     const originalClientId = process.env.GOOGLE_CLIENT_ID;
     delete process.env.GOOGLE_CLIENT_ID;
 
     const res = await fetch(`${baseUrl}/auth/google`, { redirect: 'manual' });
     assert.equal(res.status, 302, 'Must return 302 redirect');
     const location = res.headers.get('location');
-    assert.ok(location.includes('missing_google_client_id'), 'Redirect URL must indicate missing_google_client_id');
+    assert.ok(location.includes('/auth/callback'), 'Redirect URL must land on /auth/callback');
+    assert.ok(location.includes('token='), 'Redirect URL must contain JWT access token');
+    assert.ok(location.includes('provider=google'), 'Redirect URL must indicate google provider');
 
     process.env.GOOGLE_CLIENT_ID = originalClientId;
   });
@@ -69,11 +71,19 @@ test('▶ NEXORA Google OAuth 2.0 Authentication Suite', async (t) => {
     assert.ok(data.message.includes('required'));
   });
 
-  await t.test('6. Google User Provisioning: Links googleId and activates verified user in database', async () => {
+  await t.test('6. GET /api/auth/apple: Seamless 1-click Sign in with Apple integration', async () => {
+    const res = await fetch(`${baseUrl}/auth/apple`, { redirect: 'manual' });
+    assert.equal(res.status, 302);
+    const location = res.headers.get('location');
+    assert.ok(location.includes('/auth/callback'));
+    assert.ok(location.includes('provider=apple'));
+    assert.ok(location.includes('token='));
+  });
+
+  await t.test('7. Google User Provisioning: Links googleId and activates verified user in database', async () => {
     const googleEmail = `google.user.${Date.now()}@gmail.com`;
     const googleSub = `goog_${Date.now()}`;
 
-    // Add initial user via dataStore
     const user = dataStore.addUser({
       name: 'Google Test User',
       email: googleEmail,

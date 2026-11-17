@@ -11,6 +11,8 @@ export const OAuthCallbackPage = () => {
   const token = searchParams.get('token');
   const error = searchParams.get('error');
   const message = searchParams.get('message');
+  const provider = searchParams.get('provider') || 'google';
+  const providerLabel = provider === 'apple' ? 'Apple' : 'Google';
 
   const [status, setStatus] = useState('processing'); // 'processing' | 'success' | 'error'
   const [errorMessage, setErrorMessage] = useState('');
@@ -57,7 +59,7 @@ export const OAuthCallbackPage = () => {
         {status === 'processing' && (
           <div className="space-y-4">
             <RefreshCw className="w-10 h-10 text-forest-700 animate-spin mx-auto" />
-            <h2 className="text-xl font-bold text-gray-900">Verifying Google Authentication</h2>
+            <h2 className="text-xl font-bold text-gray-900">Verifying {providerLabel} Authentication</h2>
             <p className="text-xs text-gray-500 max-w-xs mx-auto">
               Exchanging authorization credentials and finalizing your secure session...
             </p>
@@ -70,7 +72,7 @@ export const OAuthCallbackPage = () => {
             <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
               <CheckCircle2 className="w-8 h-8" />
             </div>
-            <h2 className="text-xl font-bold text-gray-900">Authentication Successful!</h2>
+            <h2 className="text-xl font-bold text-gray-900">{providerLabel} Sign-In Successful!</h2>
             <p className="text-xs text-emerald-700 font-medium">
               Welcome to NEXORA. Redirecting you to your dashboard...
             </p>

@@ -10,6 +10,7 @@ import {
   initiateGoogleAuth,
   handleGoogleCallback,
   verifyGoogleToken,
+  initiateAppleAuth,
 } from '../controllers/authController.js';
 import { verifyAuth } from '../middleware/auth.js';
 
@@ -34,5 +35,8 @@ router.get('/google', initiateGoogleAuth);
 router.get('/callback/google', handleGoogleCallback);
 router.get('/google/callback', handleGoogleCallback);
 router.post('/google', verifyGoogleToken);
+
+// Apple Identity Endpoints
+router.get('/apple', initiateAppleAuth);
 
 export default router;
