@@ -1,9 +1,18 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
 import { dataStore } from '../models/dataStore.js';
-import { generateToken } from '../middleware/auth.js';
+import { generateToken, generate2FAChallengeToken } from '../middleware/auth.js';
 import { sendOTPEmail } from '../services/emailService.js';
+import {
+  encryptSecret,
+  decryptSecret,
+  generate2FASecret,
+  verifyTOTPCode,
+  generateRecoveryCodes,
+  verifyRecoveryCode,
+} from '../services/twoFactorService.js';
 
 // Cryptographic helpers for OTP generation and SHA-256 HMAC hashing
 const OTP_SECRET_SALT = process.env.OTP_SALT || 'nexora_secure_otp_salt_2026';
@@ -176,6 +185,29 @@ export const login = async (req, res) => {
       });
     }
 
+    // Step 4: Check Two-Factor Authentication Status (Google Authenticator)
+    if (user.twoFactorEnabled && user.twoFactorSecret) {
+      // Issue short-lived, single-use 2FA challenge token (5 minutes)
+      const twoFactorToken = generate2FAChallengeToken({
+        id: user._id || user.id,
+        email: user.email,
+        role: user.role,
+      });
+
+      return res.status(200).json({
+        success: true,
+        twoFactorRequired: true,
+        twoFactorToken,
+        message: 'Two-Factor Authentication required. Enter the 6-digit code from your Google Authenticator app.',
+        user: {
+          id: user._id || user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      });
+    }
+
     const token = generateToken({ id: user._id, role: user.role, email: user.email });
     const providerProfile = user.role === 'provider' ? dataStore.getProviderByUserId(user._id) : null;
 
@@ -219,11 +251,293 @@ export const getMe = async (req, res) => {
         avatar: user.avatar,
         address: user.address,
         savedProviders: user.savedProviders || [],
+        twoFactorEnabled: !!user.twoFactorEnabled,
         providerProfile: providerProfile || undefined,
       },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to retrieve user profile.' });
+  }
+};
+
+/**
+ * ============================================================================
+ * GOOGLE AUTHENTICATOR (TOTP 2FA) ENDPOINTS
+ * ============================================================================
+ */
+
+/**
+ * Step 1: Initiate 2FA Setup
+ * Generates unique Base32 TOTP secret, provisioning URI, and QR Code
+ * POST /api/auth/2fa/setup (Requires verifyAuth)
+ */
+export const setup2FA = async (req, res) => {
+  try {
+    const user = dataStore.getUserById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    // Generate unique secret and Google Authenticator QR Code
+    const { secret, otpauthUrl, qrCodeDataUrl, formattedKey } = await generate2FASecret(user.email);
+
+    // Encrypt secret with AES-256-GCM before saving in database
+    const encryptedSecret = encryptSecret(secret);
+
+    // Save temporary encrypted secret (do NOT mark twoFactorEnabled: true until verified)
+    dataStore.updateUser(user._id || user.id, {
+      twoFactorTempSecret: encryptedSecret,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Scan the QR code with Google Authenticator or enter the key manually.',
+      qrCode: qrCodeDataUrl,
+      manualKey: formattedKey,
+      otpauthUrl,
+    });
+  } catch (error) {
+    console.error('[2FA/Setup] Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to initiate 2FA setup.', error: error.message });
+  }
+};
+
+/**
+ * Step 2: Verify Setup & Enable 2FA
+ * Verifies first 6-digit TOTP code, enables 2FA, and issues 8 backup recovery codes
+ * POST /api/auth/2fa/verify-setup (Requires verifyAuth)
+ */
+export const verify2FASetup = async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) {
+      return res.status(400).json({ success: false, message: '6-digit verification code is required.' });
+    }
+
+    const user = dataStore.getUserById(req.user.id);
+    if (!user || !user.twoFactorTempSecret) {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending 2FA setup found. Please initiate 2FA setup first.',
+      });
+    }
+
+    // Verify 6-digit code with +/- 30s clock-drift tolerance
+    const isValid = verifyTOTPCode(code, user.twoFactorTempSecret);
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid verification code. Ensure your device clock is synchronized and try again.',
+      });
+    }
+
+    // Generate 8 single-use backup recovery codes
+    const { plainCodes, hashedCodes } = generateRecoveryCodes();
+
+    // Promote temp secret to active encrypted secret and enable 2FA
+    dataStore.updateUser(user._id || user.id, {
+      twoFactorEnabled: true,
+      twoFactorSecret: user.twoFactorTempSecret,
+      twoFactorTempSecret: null,
+      twoFactorRecoveryCodes: hashedCodes,
+      twoFactorLastVerifiedToken: null,
+      twoFactorLastVerifiedAt: new Date().toISOString(),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Google Authenticator 2FA enabled successfully.',
+      twoFactorEnabled: true,
+      recoveryCodes: plainCodes,
+    });
+  } catch (error) {
+    console.error('[2FA/VerifySetup] Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to verify 2FA setup.', error: error.message });
+  }
+};
+
+/**
+ * Step 3: Verify 2FA Login Challenge
+ * Accepts 6-digit code from Google Authenticator or backup recovery code, issues authenticated session
+ * POST /api/auth/2fa/verify-login (Public endpoint protected by twoFactorToken challenge)
+ */
+export const verify2FALogin = async (req, res) => {
+  try {
+    const { twoFactorToken, code, isRecoveryCode } = req.body;
+
+    if (!twoFactorToken || !code) {
+      return res.status(400).json({
+        success: false,
+        message: 'Two-factor challenge token and code are required.',
+      });
+    }
+
+    const JWT_SECRET = process.env.JWT_SECRET || 'nexora_secure_secret_key_2026_production_grade_jwt';
+    let decoded = null;
+
+    try {
+      decoded = jwt.verify(twoFactorToken, JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({
+        success: false,
+        message: 'Two-factor challenge session expired or invalid. Please sign in again.',
+      });
+    }
+
+    if (decoded.type !== '2fa_challenge' || !decoded.id) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid challenge token type.',
+      });
+    }
+
+    const user = dataStore.getUserById(decoded.id);
+    if (!user || !user.twoFactorEnabled || !user.twoFactorSecret) {
+      return res.status(400).json({
+        success: false,
+        message: 'Two-factor authentication is not active on this account.',
+      });
+    }
+
+    // Verify via Backup Recovery Code
+    if (isRecoveryCode) {
+      const matchIndex = verifyRecoveryCode(code, user.twoFactorRecoveryCodes);
+      if (matchIndex === -1) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or already-used backup recovery code.',
+        });
+      }
+
+      user.twoFactorRecoveryCodes[matchIndex].used = true;
+      user.twoFactorRecoveryCodes[matchIndex].usedAt = new Date().toISOString();
+      dataStore.updateUser(user._id || user.id, {
+        twoFactorRecoveryCodes: user.twoFactorRecoveryCodes,
+      });
+    } else {
+      // Verify via Google Authenticator 6-digit TOTP
+      const cleanCode = code.toString().trim();
+      const isValid = verifyTOTPCode(cleanCode, user.twoFactorSecret, user.twoFactorLastVerifiedToken);
+
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid 6-digit code. Please check your Google Authenticator app and try again.',
+        });
+      }
+
+      // Anti-replay: record used token
+      dataStore.updateUser(user._id || user.id, {
+        twoFactorLastVerifiedToken: cleanCode,
+        twoFactorLastVerifiedAt: new Date().toISOString(),
+      });
+    }
+
+    // 2FA Verified! Issue fully authenticated JWT session token
+    const token = generateToken({ id: user._id || user.id, role: user.role, email: user.email });
+    const providerProfile = user.role === 'provider' ? dataStore.getProviderByUserId(user._id || user.id) : null;
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Two-factor verification successful. Logged in.',
+      token,
+      user: {
+        id: user._id || user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        phone: user.phone,
+        avatar: user.avatar,
+        address: user.address,
+        twoFactorEnabled: true,
+        providerProfile: providerProfile || undefined,
+      },
+    });
+  } catch (error) {
+    console.error('[2FA/VerifyLogin] Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to verify two-factor code.', error: error.message });
+  }
+};
+
+/**
+ * Disable 2FA
+ * POST /api/auth/2fa/disable (Requires verifyAuth)
+ */
+export const disable2FA = async (req, res) => {
+  try {
+    const { password, code } = req.body;
+    const user = dataStore.getUserById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    if (!user.twoFactorEnabled) {
+      return res.status(400).json({ success: false, message: '2FA is not enabled on this account.' });
+    }
+
+    if (user.password) {
+      if (!password) {
+        return res.status(400).json({ success: false, message: 'Current password is required to disable 2FA.' });
+      }
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ success: false, message: 'Incorrect password.' });
+      }
+    }
+
+    if (code) {
+      const isValid = verifyTOTPCode(code, user.twoFactorSecret);
+      if (!isValid) {
+        return res.status(400).json({ success: false, message: 'Invalid 6-digit authenticator code.' });
+      }
+    }
+
+    dataStore.updateUser(user._id || user.id, {
+      twoFactorEnabled: false,
+      twoFactorSecret: null,
+      twoFactorTempSecret: null,
+      twoFactorRecoveryCodes: [],
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Google Authenticator 2FA disabled successfully.',
+      twoFactorEnabled: false,
+    });
+  } catch (error) {
+    console.error('[2FA/Disable] Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to disable 2FA.', error: error.message });
+  }
+};
+
+/**
+ * Get 2FA Status
+ * GET /api/auth/2fa/status (Requires verifyAuth)
+ */
+export const get2FAStatus = async (req, res) => {
+  try {
+    const user = dataStore.getUserById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    const remainingRecoveryCodes = (user.twoFactorRecoveryCodes || []).filter((rc) => !rc.used).length;
+
+    return res.status(200).json({
+      success: true,
+      twoFactorEnabled: !!user.twoFactorEnabled,
+      remainingRecoveryCodes,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to get 2FA status.' });
   }
 };
 

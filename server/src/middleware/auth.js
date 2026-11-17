@@ -8,6 +8,10 @@ export const generateToken = (payload) => {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
 };
 
+export const generate2FAChallengeToken = (payload) => {
+  return jwt.sign({ ...payload, type: '2fa_challenge' }, JWT_SECRET, { expiresIn: '5m' });
+};
+
 export const verifyAuth = async (req, res, next) => {
   try {
     let token = null;
@@ -26,6 +30,13 @@ export const verifyAuth = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+
+    if (decoded.type === '2fa_challenge') {
+      return res.status(401).json({
+        success: false,
+        message: 'Two-factor authentication incomplete. Please complete 2FA verification.',
+      });
+    }
     
     // Check if user exists in database or dataStore
     let user = null;

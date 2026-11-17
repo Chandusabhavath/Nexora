@@ -11,6 +11,11 @@ import {
   handleGoogleCallback,
   verifyGoogleToken,
   initiateAppleAuth,
+  setup2FA,
+  verify2FASetup,
+  verify2FALogin,
+  disable2FA,
+  get2FAStatus,
 } from '../controllers/authController.js';
 import { verifyAuth } from '../middleware/auth.js';
 
@@ -38,5 +43,12 @@ router.post('/google', verifyGoogleToken);
 
 // Apple Identity Endpoints
 router.get('/apple', initiateAppleAuth);
+
+// Google Authenticator (TOTP 2FA) Endpoints
+router.post('/2fa/setup', verifyAuth, setup2FA);
+router.post('/2fa/verify-setup', verifyAuth, verify2FASetup);
+router.post('/2fa/verify-login', verify2FALogin);
+router.post('/2fa/disable', verifyAuth, disable2FA);
+router.get('/2fa/status', verifyAuth, get2FAStatus);
 
 export default router;

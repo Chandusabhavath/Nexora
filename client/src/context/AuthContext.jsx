@@ -34,6 +34,15 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     const res = await apiLogin({ email, password });
+    if (res.success && res.token && !res.twoFactorRequired) {
+      localStorage.setItem('nexora_token', res.token);
+      setToken(res.token);
+      setUser(res.user);
+    }
+    return res;
+  };
+
+  const complete2FALogin = (res) => {
     if (res.success && res.token) {
       localStorage.setItem('nexora_token', res.token);
       setToken(res.token);
@@ -84,6 +93,7 @@ export const AuthProvider = ({ children }) => {
         token,
         loading,
         login,
+        complete2FALogin,
         loginWithEmailOtp,
         register,
         logout,

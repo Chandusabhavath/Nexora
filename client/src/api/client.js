@@ -37,6 +37,13 @@ export const apiVerifyEmailOtp = (email, otp) => apiClient('/auth/verify-otp', {
 export const apiResendEmailOtp = (email) => apiClient('/auth/resend-otp', { method: 'POST', body: JSON.stringify({ email }) });
 export const apiVerifyGoogleToken = (payload) => apiClient('/auth/google', { method: 'POST', body: JSON.stringify(payload) });
 
+// Google Authenticator (TOTP 2FA) API
+export const apiSetup2FA = () => apiClient('/auth/2fa/setup', { method: 'POST' });
+export const apiVerify2FASetup = (code) => apiClient('/auth/2fa/verify-setup', { method: 'POST', body: JSON.stringify({ code }) });
+export const apiVerify2FALogin = (twoFactorToken, code, isRecoveryCode = false) => apiClient('/auth/2fa/verify-login', { method: 'POST', body: JSON.stringify({ twoFactorToken, code, isRecoveryCode }) });
+export const apiDisable2FA = (password, code) => apiClient('/auth/2fa/disable', { method: 'POST', body: JSON.stringify({ password, code }) });
+export const apiGet2FAStatus = () => apiClient('/auth/2fa/status');
+
 // Services & Providers
 export const apiGetServices = (params = '') => apiClient(`/services${params ? `?${params}` : ''}`);
 export const apiGetServiceById = (id) => apiClient(`/services/${id}`);

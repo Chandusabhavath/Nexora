@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
-import { apiRequestOtp, apiVerifyOtp } from '../api/client.js';
+import { apiRequestOtp, apiVerifyOtp, apiVerify2FALogin } from '../api/client.js';
 import { EmailOtpAuth } from '../components/EmailOtpAuth.jsx';
-import { Mail, Lock, Phone, ArrowRight, ShieldCheck, Sparkles } from 'lucide-react';
+import { Mail, Lock, Phone, ArrowRight, ArrowLeft, ShieldCheck, Sparkles, KeyRound, ShieldAlert, RefreshCw } from 'lucide-react';
 
 export const LoginPage = () => {
-  const { login } = useAuth();
+  const { login, complete2FALogin } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirect = searchParams.get('redirect') || '/';
@@ -15,6 +15,27 @@ export const LoginPage = () => {
   const [authMethod, setAuthMethod] = useState(initialMethod); // 'email_otp' | 'password' | 'otp'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+
+  // Google Authenticator (TOTP 2FA) State
+  const [twoFactorRequired, setTwoFactorRequired] = useState(
+    () => !!sessionStorage.getItem('nexora_2fa_token')
+  );
+  const [twoFactorToken, setTwoFactorToken] = useState(
+    () => sessionStorage.getItem('nexora_2fa_token') || ''
+  );
+  const [twoFactorUser, setTwoFactorUser] = useState(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem('nexora_2fa_user')) || null;
+    } catch {
+      return null;
+    }
+  });
+  const [totpDigits, setTotpDigits] = useState(['', '', '', '', '', '']);
+  const totpInputRefs = useRef([]);
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [twoFactorLoading, setTwoFactorLoading] = useState(false);
+  const [twoFactorError, setTwoFactorError] = useState('');
   
   // Phone OTP state
   const [phone, setPhone] = useState('');
@@ -39,6 +60,15 @@ export const LoginPage = () => {
     window.location.href = '/api/auth/apple';
   };
 
+  // Auto-focus first box when 2FA screen is displayed
+  useEffect(() => {
+    if (twoFactorRequired && totpInputRefs.current[0]) {
+      setTimeout(() => {
+        totpInputRefs.current[0]?.focus();
+      }, 100);
+    }
+  }, [twoFactorRequired, useRecoveryCode]);
+
   const handlePasswordLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -46,7 +76,18 @@ export const LoginPage = () => {
 
     try {
       const res = await login(email, password);
-      if (res.success) {
+
+      // Check if 2FA (Google Authenticator) is required
+      if (res.twoFactorRequired) {
+        setTwoFactorRequired(true);
+        setTwoFactorToken(res.twoFactorToken);
+        setTwoFactorUser(res.user);
+        sessionStorage.setItem('nexora_2fa_token', res.twoFactorToken);
+        sessionStorage.setItem('nexora_2fa_user', JSON.stringify(res.user));
+        return;
+      }
+
+      if (res.success && res.user) {
         if (res.user.role === 'admin') navigate('/admin');
         else if (res.user.role === 'provider') navigate('/provider/dashboard');
         else navigate(redirect === 'booking' ? -1 : '/dashboard');
@@ -57,6 +98,112 @@ export const LoginPage = () => {
       setError(err.message || 'Invalid email or password.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleVerify2FA = async (codeToVerify, isRecovery = false) => {
+    const code = isRecovery ? recoveryCode.trim() : (codeToVerify || totpDigits.join(''));
+    if (!code) {
+      setTwoFactorError(isRecovery ? 'Please enter your recovery code.' : 'Please enter all 6 digits.');
+      return;
+    }
+
+    if (!isRecovery && code.length !== 6) {
+      setTwoFactorError('Please enter all 6 digits from Google Authenticator.');
+      return;
+    }
+
+    setTwoFactorLoading(true);
+    setTwoFactorError('');
+
+    try {
+      const res = await apiVerify2FALogin(twoFactorToken, code, isRecovery);
+      if (res.success && res.token) {
+        sessionStorage.removeItem('nexora_2fa_token');
+        sessionStorage.removeItem('nexora_2fa_user');
+        complete2FALogin(res);
+        if (res.user.role === 'admin') navigate('/admin');
+        else if (res.user.role === 'provider') navigate('/provider/dashboard');
+        else navigate(redirect === 'booking' ? -1 : '/dashboard');
+      } else {
+        setTwoFactorError(res.message || 'Invalid authentication code.');
+      }
+    } catch (err) {
+      setTwoFactorError(err.message || 'Verification failed. Please check the code and try again.');
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  const cancel2FA = () => {
+    sessionStorage.removeItem('nexora_2fa_token');
+    sessionStorage.removeItem('nexora_2fa_user');
+    setTwoFactorRequired(false);
+    setTwoFactorToken('');
+    setTwoFactorUser(null);
+    setTotpDigits(['', '', '', '', '', '']);
+    setTwoFactorError('');
+  };
+
+  const handleTotpDigitChange = (index, value) => {
+    const clean = value.replace(/\D/g, '');
+    if (clean.length > 1) {
+      const pasted = clean.slice(0, 6).split('');
+      const newDigits = [...totpDigits];
+      pasted.forEach((d, i) => { if (i < 6) newDigits[i] = d; });
+      setTotpDigits(newDigits);
+      const focusTarget = Math.min(pasted.length, 5);
+      totpInputRefs.current[focusTarget]?.focus();
+      if (pasted.length === 6) {
+        handleVerify2FA(newDigits.join(''), false);
+      }
+      return;
+    }
+
+    const newDigits = [...totpDigits];
+    newDigits[index] = clean;
+    setTotpDigits(newDigits);
+    setTwoFactorError('');
+
+    if (clean && index < 5) {
+      totpInputRefs.current[index + 1]?.focus();
+    }
+
+    if (newDigits.join('').length === 6) {
+      handleVerify2FA(newDigits.join(''), false);
+    }
+  };
+
+  const handleTotpKeyDown = (index, e) => {
+    if (e.key === 'Backspace') {
+      if (!totpDigits[index] && index > 0) {
+        const newDigits = [...totpDigits];
+        newDigits[index - 1] = '';
+        setTotpDigits(newDigits);
+        totpInputRefs.current[index - 1]?.focus();
+      } else {
+        const newDigits = [...totpDigits];
+        newDigits[index] = '';
+        setTotpDigits(newDigits);
+      }
+    } else if (e.key === 'ArrowLeft' && index > 0) {
+      totpInputRefs.current[index - 1]?.focus();
+    } else if (e.key === 'ArrowRight' && index < 5) {
+      totpInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleTotpPaste = (e) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (!pasted) return;
+    const digits = pasted.split('');
+    const newDigits = ['', '', '', '', '', ''];
+    digits.forEach((d, i) => { newDigits[i] = d; });
+    setTotpDigits(newDigits);
+    totpInputRefs.current[Math.min(digits.length, 5)]?.focus();
+    if (digits.length === 6) {
+      handleVerify2FA(pasted, false);
     }
   };
 
@@ -109,14 +256,164 @@ export const LoginPage = () => {
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-12">
       <div className="bg-white w-full max-w-md rounded-3xl border border-surface-200 shadow-xl p-8 space-y-6">
         
-        {/* Brand Header */}
-        <div className="text-center space-y-1">
-          <div className="w-12 h-12 bg-forest-800 text-white rounded-2xl flex items-center justify-center font-black text-2xl mx-auto shadow-md">
-            N
+        {twoFactorRequired ? (
+          <div className="space-y-6 animate-fadeIn">
+            {/* 2FA Header */}
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 bg-emerald-50 text-forest-800 rounded-2xl flex items-center justify-center mx-auto border-2 border-forest-800 shadow-sm">
+                <ShieldAlert className="w-7 h-7 text-forest-800" />
+              </div>
+              <h2 className="text-xl font-bold text-gray-900">Two-Factor Authentication</h2>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Enter the 6-digit verification code from your <strong className="text-gray-800">Google Authenticator</strong> app for <span className="font-semibold text-forest-900">{twoFactorUser?.email || email}</span>.
+              </p>
+            </div>
+
+            {/* Error Message */}
+            {twoFactorError && (
+              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 animate-fadeIn font-medium">
+                {twoFactorError}
+              </div>
+            )}
+
+            {!useRecoveryCode ? (
+              /* 6-Digit TOTP Input Boxes */
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold uppercase text-gray-700 tracking-wider">
+                      6-Digit Authenticator Code
+                    </label>
+                    <span className="text-[11px] text-gray-400">30s time-step</span>
+                  </div>
+
+                  <div className="flex justify-between gap-2" onPaste={handleTotpPaste}>
+                    {totpDigits.map((digit, idx) => (
+                      <input
+                        key={idx}
+                        ref={(el) => (totpInputRefs.current[idx] = el)}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={1}
+                        value={digit}
+                        disabled={twoFactorLoading}
+                        onChange={(e) => handleTotpDigitChange(idx, e.target.value)}
+                        onKeyDown={(e) => handleTotpKeyDown(idx, e)}
+                        className={`w-11 h-13 sm:w-12 sm:h-14 text-center text-xl sm:text-2xl font-black font-mono rounded-xl border-2 transition-all outline-none ${
+                          twoFactorError
+                            ? 'border-rose-400 bg-rose-50/40 text-rose-900 focus:border-rose-600 focus:ring-2 focus:ring-rose-200'
+                            : digit
+                            ? 'border-forest-800 bg-forest-50/20 text-forest-950 ring-1 ring-forest-800'
+                            : 'border-surface-200 bg-white text-gray-900 focus:border-forest-800 focus:ring-2 focus:ring-forest-100'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={twoFactorLoading || totpDigits.join('').length < 6}
+                  onClick={() => handleVerify2FA()}
+                  className="w-full bg-forest-800 hover:bg-forest-900 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md flex items-center justify-center space-x-2"
+                >
+                  {twoFactorLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Verifying with Authenticator...</span>
+                    </>
+                  ) : (
+                    <>
+                      <KeyRound className="w-4 h-4" />
+                      <span>Verify & Complete Login</span>
+                    </>
+                  )}
+                </button>
+
+                <div className="pt-2 text-center">
+                  <button
+                    type="button"
+                    onClick={() => { setUseRecoveryCode(true); setTwoFactorError(''); }}
+                    className="text-xs text-forest-800 font-semibold hover:underline"
+                  >
+                    Lost device? Use a backup recovery code
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Recovery Code Alternative */
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase text-gray-700 tracking-wider mb-1.5">
+                    Backup Recovery Code
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    autoFocus
+                    value={recoveryCode}
+                    onChange={(e) => setRecoveryCode(e.target.value)}
+                    placeholder="e.g. a1b2-c3d4"
+                    className="w-full text-center text-sm font-mono tracking-widest py-3 px-4 rounded-xl border border-surface-200 focus:outline-none focus:ring-2 focus:ring-forest-800"
+                  />
+                  <p className="text-[11px] text-gray-400 mt-1.5 text-center">
+                    Enter one of your 8 single-use recovery codes generated when setting up 2FA.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={twoFactorLoading || !recoveryCode.trim()}
+                  onClick={() => handleVerify2FA(recoveryCode, true)}
+                  className="w-full bg-forest-800 hover:bg-forest-900 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md flex items-center justify-center space-x-2"
+                >
+                  {twoFactorLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Verifying Recovery Code...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>Verify Backup Code</span>
+                    </>
+                  )}
+                </button>
+
+                <div className="pt-2 text-center">
+                  <button
+                    type="button"
+                    onClick={() => { setUseRecoveryCode(false); setTwoFactorError(''); }}
+                    className="text-xs text-forest-800 font-semibold hover:underline"
+                  >
+                    Back to Google Authenticator 6-digit code
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="border-t border-surface-100 pt-3 text-center">
+              <button
+                type="button"
+                onClick={cancel2FA}
+                className="inline-flex items-center space-x-1.5 text-xs text-gray-500 hover:text-gray-900 transition-colors"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Cancel and return to sign in</span>
+              </button>
+            </div>
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 pt-2">Welcome to NEXORA</h2>
-          <p className="text-xs text-gray-500">Sign in to your account</p>
-        </div>
+        ) : (
+          <>
+            {/* Brand Header */}
+            <div className="text-center space-y-1">
+              <div className="w-12 h-12 bg-forest-800 text-white rounded-2xl flex items-center justify-center font-black text-2xl mx-auto shadow-md">
+                N
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900 pt-2">Welcome to NEXORA</h2>
+              <p className="text-xs text-gray-500">Sign in to your account</p>
+            </div>
 
         {/* Method Toggle: Email OTP vs Password vs Mobile OTP */}
         <div className="grid grid-cols-3 p-1 bg-surface-100 rounded-xl text-xs font-semibold">
@@ -375,6 +672,8 @@ export const LoginPage = () => {
             Register here
           </Link>
         </p>
+          </>
+        )}
 
       </div>
     </div>

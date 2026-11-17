@@ -43,6 +43,34 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    twoFactorEnabled: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    twoFactorSecret: {
+      type: String,
+      default: null,
+    },
+    twoFactorTempSecret: {
+      type: String,
+      default: null,
+    },
+    twoFactorRecoveryCodes: [
+      {
+        codeHash: { type: String, required: true },
+        used: { type: Boolean, default: false },
+        usedAt: { type: Date, default: null },
+      },
+    ],
+    twoFactorLastVerifiedToken: {
+      type: String,
+      default: null,
+    },
+    twoFactorLastVerifiedAt: {
+      type: Date,
+      default: null,
+    },
     otpCode: {
       type: String,
       default: null,
