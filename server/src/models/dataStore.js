@@ -397,7 +397,7 @@ class DataStore {
       durationMinutes: 90,
       includedItems: ['Mounting bracket setup', 'Dual-terminal testing', 'Heavy duty cabling check'],
       excludedItems: ['Inverter unit', 'Battery unit'],
-      images: ['https://images.unsplash.com/photo-1558441719-79841804f378?auto=format&fit=crop&q=80&w=600'],
+      images: ['https://images.unsplash.com/photo-1621905252507-b35492cc74b4?auto=format&fit=crop&q=80&w=600'],
       isActive: true,
       tags: ['inverter', 'battery', 'backup', 'power'],
       createdAt: new Date().toISOString(),

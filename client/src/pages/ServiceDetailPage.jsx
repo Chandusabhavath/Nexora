@@ -84,8 +84,12 @@ export const ServiceDetailPage = ({ onBookService }) => {
           {/* Main Photo Banner */}
           <div className="rounded-3xl overflow-hidden border border-surface-200 bg-surface-100 shadow-sm relative h-80 sm:h-96">
             <img
-              src={service.images?.[0] || 'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&q=80&w=1000'}
+              src={service.images?.[0] || 'https://images.unsplash.com/photo-1621905252507-b35492cc74b4?auto=format&fit=crop&q=80&w=1000'}
               alt={service.title}
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = 'https://images.unsplash.com/photo-1621905252507-b35492cc74b4?auto=format&fit=crop&q=80&w=1000';
+              }}
               className="w-full h-full object-cover"
             />
             <div className="absolute top-4 left-4 bg-white/95 backdrop-blur-sm px-3.5 py-1.5 rounded-full text-xs font-bold text-forest-800 shadow-sm">

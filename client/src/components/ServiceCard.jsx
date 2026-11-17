@@ -12,8 +12,12 @@ export const ServiceCard = ({ service, onBookNow }) => {
       {/* Service Image with Category & Price Badge */}
       <div className="relative h-48 w-full overflow-hidden bg-surface-100">
         <img
-          src={service.images?.[0] || 'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&q=80&w=600'}
+          src={service.images?.[0] || 'https://images.unsplash.com/photo-1621905252507-b35492cc74b4?auto=format&fit=crop&q=80&w=600'}
           alt={service.title}
+          onError={(e) => {
+            e.currentTarget.onerror = null;
+            e.currentTarget.src = 'https://images.unsplash.com/photo-1621905252507-b35492cc74b4?auto=format&fit=crop&q=80&w=600';
+          }}
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
         />
         <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-sm px-2.5 py-1 rounded-full text-[11px] font-semibold text-forest-800 shadow-sm">
